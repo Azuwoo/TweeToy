@@ -1,26 +1,101 @@
-import twitter
+#!/usr/bin/env python
+# coding:utf-8
+import time
 import os
-import config
+import RPi.GPIO as GPIO
+import twitter
 
-f = open('text.txt', 'w') # open file write mode
+GPIO.setmode(GPIO.BCM)
+DEBUG = 1
 
-api = twitter.Api(                                                                                                                                                        
-    consumer_key = config.twDict['consumer_key'],
-    consumer_secret = config.twDict['consumer_secret'],
-    access_token_key = config.twDict['access_token_key'],
-    access_token_secret = config.twDict['access_token_secret']
-)
+# Edit (1),(2) to adapt your environment
 
-statuses = api.GetUserTimeline(screen_name='@dave_spector')
+# dev account ....(1)
+api = twitter.Api(consumer_key='user consumer_key',
+	consumer_secret='user consumer_secret',
+        access_token_key='user access_token_key',
+        access_token_secret='user access_token_secret')
 
-#statuses = api.GetUserTimeline('dave_spector')
-#statuses = api.GetPublicTimeline()  it's removed
+# specify the account you want to get tweet from ....(2)
+account = '@dave_spector'
 
-print statuses[0].created_at
-print statuses[0].text + '\n'
 
-for s in statuses:
-    f.write(s.text.encode('utf_8'))
+# read SPI data from MCP3008 chip, 8 possible adc's (0 thru 7)
+def readadc(adcnum, clockpin, mosipin, misopin, cspin):
+    	if ((adcnum > 7) or (adcnum < 0)):
+            	return -1
+    	GPIO.output(cspin, True)
 
-# write data
-f.close() #close file
+    	GPIO.output(clockpin, False)  # start clock low
+    	GPIO.output(cspin, False) 	# bring CS low
+
+    	commandout = adcnum
+    	commandout |= 0x18  # start bit + single-ended bit
+    	commandout <<= 3	# we only need to send 5 bits here
+    	for i in range(5):
+            	if (commandout & 0x80):
+                    	GPIO.output(mosipin, True)
+            	else:
+                    	GPIO.output(mosipin, False)
+            	commandout <<= 1
+            	GPIO.output(clockpin, True)
+            	GPIO.output(clockpin, False)
+
+    	adcout = 0
+    	# read in one empty bit, one null bit and 10 ADC bits
+    	for i in range(12):
+            	GPIO.output(clockpin, True)
+            	GPIO.output(clockpin, False)
+            	adcout <<= 1
+            	if (GPIO.input(misopin)):
+                    	adcout |= 0x1
+
+    	GPIO.output(cspin, True)
+
+    	adcout >>= 1   	# first bit is 'null' so drop it
+    	return adcout
+
+# change these as desired - they're the pins connected from the
+# SPI port on the ADC to the Cobbler
+SPICLK = 18
+SPIMISO = 23
+SPIMOSI = 24
+SPICS = 25
+
+# set up the SPI interface pins
+GPIO.setup(SPIMOSI, GPIO.OUT)
+GPIO.setup(SPIMISO, GPIO.IN)
+GPIO.setup(SPICLK, GPIO.OUT)
+GPIO.setup(SPICS, GPIO.OUT)
+
+# 10k trim pot connected to adc #0
+potentiometer = 0;
+
+last_read = 0   	# this keeps track of the last potentiometer value
+tolerance = 5   	# to keep from being jittery we'll only change
+                	# volume when the pot has moved more than 5 'counts'
+
+# we'll assume that the pot didn't move
+trim_pot_changed = False
+
+# read the analog pin
+trim_pot = readadc(potentiometer, SPICLK, SPIMOSI, SPIMISO, SPICS)
+
+# how much has it changed since the last read?
+pot_adjust = abs(trim_pot - last_read)
+
+if DEBUG:
+	print trim_pot
+
+# tweet the latest tweet
+if trim_pot < 600:
+       	statuses = api.GetUserTimeline(screen_name=account)
+       	statuses[0].text + '\n'
+	text = statuses[0].text.encode('utf-8')
+	message = "/home/pi/aquestalkpi/AquesTalkPi " + '"' + text  + '"' +" | aplay"
+	os.system(message)
+
+
+
+
+
